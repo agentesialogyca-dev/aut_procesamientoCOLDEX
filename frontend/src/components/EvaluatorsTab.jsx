@@ -21,6 +21,23 @@ function getHeatColor(val) {
   return '#ABF5D1';
 }
 
+function EvaluatorTooltip({ active, payload, evaluatorsByCompany }) {
+  if (!active || !payload || !payload.length) return null;
+  const row = payload[0].payload;
+  const names = evaluatorsByCompany[row.company] || [];
+  return (
+    <div className="bg-white rounded-lg border border-border shadow-lg px-3 py-2 text-xs max-w-[240px]">
+      <p className="font-semibold text-primary-800 mb-1">{row.company}</p>
+      <p className="text-muted mb-1.5">{row.count} {row.count === 1 ? 'evaluador' : 'evaluadores'}</p>
+      <ul className="space-y-0.5">
+        {names.map(n => (
+          <li key={n} className="text-primary-700">• {n}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function EvaluatorsTab({ sector, type }) {
   const { data, loading } = useApi(() => getEvaluators(sector, type), [sector, type]);
 
@@ -28,6 +45,13 @@ export default function EvaluatorsTab({ sector, type }) {
   if (!data) return null;
 
   const { counts, matrix } = data;
+
+  const evaluatorsByCompany = Object.fromEntries(
+    matrix.to.map((toName, ci) => [
+      toName,
+      matrix.from.filter((_, ri) => matrix.values[ri]?.[ci] != null),
+    ])
+  );
 
   return (
     <div className="space-y-5">
@@ -39,7 +63,7 @@ export default function EvaluatorsTab({ sector, type }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 11, fill: '#6B778C' }} axisLine={false} />
               <YAxis dataKey="company" type="category" width={150} tick={{ fontSize: 11, fill: '#172B4D' }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ borderRadius: 10, border: '1px solid #DFE1E6', fontSize: 13 }} />
+              <Tooltip content={<EvaluatorTooltip evaluatorsByCompany={evaluatorsByCompany} />} cursor={{ fill: '#F4F5F7' }} />
               <Bar dataKey="count" name="Evaluadores" radius={[0, 6, 6, 0]} barSize={20} fill="#0052CC" />
             </BarChart>
           </ResponsiveContainer>
@@ -64,7 +88,7 @@ export default function EvaluatorsTab({ sector, type }) {
                   <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={{ borderRadius: 10, border: '1px solid #DFE1E6', fontSize: 13 }} />
+              <Tooltip content={<EvaluatorTooltip evaluatorsByCompany={evaluatorsByCompany} />} />
             </PieChart>
           </ResponsiveContainer>
           <div className="text-center -mt-2">
@@ -75,6 +99,29 @@ export default function EvaluatorsTab({ sector, type }) {
           </div>
         </Card>
       </div>
+
+      {/* Lista quien evaluo a quien */}
+      <Card title="Quien evaluo a cada empresa">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {counts.map(({ company, count }) => (
+            <div key={company} className="border border-border rounded-lg p-3 bg-surface/40">
+              <div className="flex items-center justify-between mb-2">
+                <p className="font-semibold text-primary-800 text-sm truncate" title={company}>{company}</p>
+                <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] rounded-full bg-primary-600 text-white text-[11px] font-bold px-1.5">
+                  {count}
+                </span>
+              </div>
+              <ul className="space-y-0.5">
+                {(evaluatorsByCompany[company] || []).map(name => (
+                  <li key={name} className="text-xs text-muted truncate" title={name}>
+                    • {name}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {/* Matrix */}
       <Card title="Matriz de evaluacion (Evaluador x Evaluado)">
