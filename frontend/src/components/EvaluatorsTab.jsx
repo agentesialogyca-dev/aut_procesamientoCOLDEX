@@ -2,15 +2,8 @@ import { useApi } from '../hooks/useApi';
 import { getEvaluators } from '../lib/api';
 import Card from './Card';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList,
 } from 'recharts';
-
-const PIE_COLORS = [
-  '#0052CC', '#36B37E', '#FF8B00', '#6554C0', '#00B8D9',
-  '#FF5630', '#FFAB00', '#00875A', '#403294', '#008DA6',
-  '#BF2600', '#FF991F', '#006644', '#5243AA', '#00A3BF',
-];
 
 function getHeatColor(val) {
   if (val == null) return '#F4F5F7';
@@ -53,6 +46,20 @@ export default function EvaluatorsTab({ sector, type }) {
     ])
   );
 
+  // Histograma: cuantas empresas tuvieron N evaluadores
+  const histogramMap = counts.reduce((acc, { count }) => {
+    acc[count] = (acc[count] || 0) + 1;
+    return acc;
+  }, {});
+  const histogramData = Object.entries(histogramMap)
+    .map(([bucket, companies]) => ({ bucket: Number(bucket), companies }))
+    .sort((a, b) => a.bucket - b.bucket);
+
+  const totalEvaluations = counts.reduce((sum, c) => sum + c.count, 0);
+  const avgEvaluators = counts.length ? (totalEvaluations / counts.length).toFixed(1) : '0';
+  const maxEvaluators = counts.length ? Math.max(...counts.map(c => c.count)) : 0;
+  const minEvaluators = counts.length ? Math.min(...counts.map(c => c.count)) : 0;
+
   return (
     <div className="space-y-5">
       {/* Cards + Pie */}
@@ -69,34 +76,56 @@ export default function EvaluatorsTab({ sector, type }) {
           </ResponsiveContainer>
         </Card>
 
-        <Card title="Distribucion">
-          <ResponsiveContainer width="100%" height={380}>
-            <PieChart>
-              <Pie
-                data={counts}
-                cx="50%"
-                cy="50%"
-                innerRadius={70}
-                outerRadius={120}
-                paddingAngle={2}
-                dataKey="count"
-                nameKey="company"
-                label={({ company, count }) => `${company}: ${count}`}
-                labelLine={{ stroke: '#97A0AF', strokeWidth: 1 }}
-              >
-                {counts.map((_, i) => (
-                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip content={<EvaluatorTooltip evaluatorsByCompany={evaluatorsByCompany} />} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="text-center -mt-2">
-            <span className="text-2xl font-bold text-primary-800">
-              {counts.reduce((sum, c) => sum + c.count, 0)}
-            </span>
-            <span className="text-sm text-muted ml-1.5">evaluaciones totales</span>
+        <Card title="Distribucion de evaluadores">
+          <div className="grid grid-cols-4 gap-2 mb-4">
+            <div className="rounded-lg bg-primary-50 px-3 py-2">
+              <p className="text-[10px] font-semibold text-primary-600 uppercase tracking-wider">Empresas</p>
+              <p className="text-xl font-bold text-primary-800">{counts.length}</p>
+            </div>
+            <div className="rounded-lg bg-primary-50 px-3 py-2">
+              <p className="text-[10px] font-semibold text-primary-600 uppercase tracking-wider">Promedio</p>
+              <p className="text-xl font-bold text-primary-800">{avgEvaluators}</p>
+            </div>
+            <div className="rounded-lg bg-primary-50 px-3 py-2">
+              <p className="text-[10px] font-semibold text-primary-600 uppercase tracking-wider">Min</p>
+              <p className="text-xl font-bold text-primary-800">{minEvaluators}</p>
+            </div>
+            <div className="rounded-lg bg-primary-50 px-3 py-2">
+              <p className="text-[10px] font-semibold text-primary-600 uppercase tracking-wider">Max</p>
+              <p className="text-xl font-bold text-primary-800">{maxEvaluators}</p>
+            </div>
           </div>
+
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={histogramData} margin={{ top: 20, right: 20, bottom: 28, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+              <XAxis
+                dataKey="bucket"
+                tick={{ fontSize: 11, fill: '#6B778C' }}
+                axisLine={false}
+                label={{ value: 'Numero de evaluadores', position: 'insideBottom', offset: -14, style: { fontSize: 11, fill: '#6B778C' } }}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: '#6B778C' }}
+                axisLine={false}
+                allowDecimals={false}
+                label={{ value: 'Empresas', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: '#6B778C', textAnchor: 'middle' } }}
+              />
+              <Tooltip
+                cursor={{ fill: '#F4F5F7' }}
+                contentStyle={{ borderRadius: 10, border: '1px solid #DFE1E6', fontSize: 13 }}
+                formatter={(value) => [`${value} ${value === 1 ? 'empresa' : 'empresas'}`, '']}
+                labelFormatter={(v) => `${v} ${v === 1 ? 'evaluador' : 'evaluadores'}`}
+              />
+              <Bar dataKey="companies" fill="#0052CC" radius={[6, 6, 0, 0]} barSize={36}>
+                <LabelList dataKey="companies" position="top" style={{ fontSize: 11, fontWeight: 600, fill: '#0052CC' }} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+
+          <p className="text-center text-xs text-muted mt-2">
+            <span className="font-bold text-primary-800">{totalEvaluations}</span> evaluaciones totales
+          </p>
         </Card>
       </div>
 
