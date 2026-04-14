@@ -1,36 +1,22 @@
 """
-Automatización del Procesamiento de Resultados COLDEX Sectorial.
-Genera un Excel con una hoja por cada combinación Sector × Tipo (IND/CAD).
+Automatizacion del Procesamiento de Resultados COLDEX Sectorial.
+Genera un Excel con una hoja por cada combinacion Sector x Tipo (IND/CAD).
+
+Pure Python + openpyxl (sin pandas/numpy) para mantener el deploy
+serverless por debajo del limite de tamano de Vercel.
 """
 
-import pandas as pd
-import numpy as np
-from openpyxl import Workbook
+import io
+import math
+from pathlib import Path
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-from pathlib import Path
 
-# ─── Configuración ──────────────────────────────────────────────────────────────
+# ─── Configuracion ──────────────────────────────────────────────────────────
 
 DATA_DIR = Path("data")
 OUTPUT_FILE = DATA_DIR / "Procesamiento_Resultados_Coldex_Sectorial_2025.xlsx"
-
-
-def find_input_file():
-    """Busca el primer archivo .xlsx en data/ que no sea el de salida."""
-    xlsx_files = [
-        f for f in sorted(DATA_DIR.glob("*.xlsx"))
-        if f != OUTPUT_FILE and not f.name.startswith("~$")
-    ]
-    if not xlsx_files:
-        raise FileNotFoundError(f"No se encontró ningún archivo .xlsx en {DATA_DIR}/")
-    return xlsx_files[0]
-
-
-def read_input_excel(path=None):
-    """Lee el archivo de entrada usando la primera hoja disponible."""
-    path = path or find_input_file()
-    return pd.read_excel(path, sheet_name=0)
 
 SECTOR_MAP = {
     "TXT": "Textil",
@@ -46,7 +32,6 @@ TYPE_MAP = {
     "CADENA": "CAD",
 }
 
-# Orden deseado de subcategorías (PollDesc2)
 SUBCATEGORY_ORDER = [
     "Gestión Comercial",
     "Relacionamiento y Comunicación",
@@ -63,7 +48,115 @@ SUBCATEGORY_ORDER = [
     "Sostenibilidad",
 ]
 
-# ─── Estilos ────────────────────────────────────────────────────────────────────
+
+# ─── Utilidades de datos (reemplazan pandas) ────────────────────────────────
+
+def is_num(v):
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, (int, float)):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return False
+        return True
+    return False
+
+
+def read_xlsx_records(source):
+    """Lee un xlsx (path o bytes) y devuelve lista de dicts."""
+    if isinstance(source, (bytes, bytearray)):
+        source = io.BytesIO(source)
+    wb = load_workbook(source, read_only=True, data_only=True)
+    ws = wb.active
+    it = ws.iter_rows(values_only=True)
+    headers = [str(h) if h is not None else "" for h in next(it)]
+    rows = []
+    for row in it:
+        if all(v is None for v in row):
+            continue
+        rows.append(dict(zip(headers, row)))
+    wb.close()
+    return rows
+
+
+def filter_rows(rows, **kwargs):
+    return [r for r in rows if all(r.get(k) == v for k, v in kwargs.items())]
+
+
+def unique_values(rows, col):
+    return {r.get(col) for r in rows if r.get(col) is not None}
+
+
+def unique_sorted(rows, col):
+    return sorted(unique_values(rows, col))
+
+
+def nunique(rows, col):
+    return len(unique_values(rows, col))
+
+
+def mean(values):
+    nums = [v for v in values if is_num(v)]
+    return sum(nums) / len(nums) if nums else None
+
+
+def mean_col(rows, col):
+    return mean([r.get(col) for r in rows])
+
+
+def round2(v):
+    return round(v, 2) if v is not None else None
+
+
+def group_nunique(rows, by_col, count_col):
+    """Cuenta valores unicos de count_col por cada grupo de by_col."""
+    d = {}
+    for r in rows:
+        key = r.get(by_col)
+        if key is None:
+            continue
+        val = r.get(count_col)
+        if val is None:
+            continue
+        d.setdefault(key, set()).add(val)
+    return {k: len(v) for k, v in d.items()}
+
+
+def pivot_mean(rows, row_key_cols, col_key, val_col):
+    """Pivot: media de val_col agrupada por tuple(row_key_cols) x col_key.
+
+    Devuelve dict {row_tuple: {col_value: mean}}.
+    """
+    buckets = {}
+    for r in rows:
+        rk = tuple(r.get(k) for k in row_key_cols)
+        ck = r.get(col_key)
+        val = r.get(val_col)
+        if not is_num(val):
+            continue
+        buckets.setdefault(rk, {}).setdefault(ck, []).append(val)
+    return {rk: {ck: sum(v) / len(v) for ck, v in inner.items()} for rk, inner in buckets.items()}
+
+
+def ordered_subcategories(rows):
+    present = set(unique_values(rows, "PollDesc2"))
+    ordered = [s for s in SUBCATEGORY_ORDER if s in present]
+    extras = sorted(present - set(ordered))
+    return ordered + extras
+
+
+def find_input_file():
+    xlsx_files = [
+        f for f in sorted(DATA_DIR.glob("*.xlsx"))
+        if f != OUTPUT_FILE and not f.name.startswith("~$")
+    ]
+    if not xlsx_files:
+        raise FileNotFoundError(f"No se encontro ningun archivo .xlsx en {DATA_DIR}/")
+    return xlsx_files[0]
+
+
+# ─── Estilos ────────────────────────────────────────────────────────────────
 
 FONT_BASE = Font(name="Aptos Narrow", size=11)
 FONT_BOLD = Font(name="Aptos Narrow", size=11, bold=True)
@@ -90,7 +183,7 @@ def set_cell(ws, row, col, value, font=None, fill=None, border=None, number_form
         cell.fill = fill
     if border:
         cell.border = border
-    if number_format and value is not None and not (isinstance(value, float) and np.isnan(value)):
+    if number_format and is_num(value):
         cell.number_format = number_format
     if alignment:
         cell.alignment = alignment
@@ -108,23 +201,16 @@ def apply_row_style(ws, row, max_col, font=None, fill=None, border=None):
             cell.border = border
 
 
-def safe_mean(series):
-    vals = series.dropna()
-    return vals.mean() if len(vals) > 0 else None
+# ─── Construccion de hoja ───────────────────────────────────────────────────
 
-
-def build_sheet(wb, df_sector, id_poll, id_category, id_type, sector_name, type_short):
-    """Construye una hoja de procesamiento para una combinación sector × tipo."""
-    sheet_name = f"Proc {sector_name} {type_short}"
-    if len(sheet_name) > 31:
-        sheet_name = sheet_name[:31]
+def build_sheet(wb, rows_sector, id_poll, id_category, id_type, sector_name, type_short):
+    sheet_name = f"Proc {sector_name} {type_short}"[:31]
     ws = wb.create_sheet(title=sheet_name)
 
-    if df_sector.empty:
-        set_cell(ws, 1, 1, "Sin datos para esta combinación")
+    if not rows_sector:
+        set_cell(ws, 1, 1, "Sin datos para esta combinacion")
         return
 
-    # ─── Sección A: Encabezado ──────────────────────────────────────────────
     set_cell(ws, 1, 1, "IDPoll", font=FONT_BOLD)
     set_cell(ws, 1, 2, id_poll)
     set_cell(ws, 2, 1, "IDCategory", font=FONT_BOLD)
@@ -132,12 +218,10 @@ def build_sheet(wb, df_sector, id_poll, id_category, id_type, sector_name, type_
     set_cell(ws, 3, 1, "IDType", font=FONT_BOLD)
     set_cell(ws, 3, 2, id_type)
 
-    # Empresas evaluadas (columnas de la pivote), orden alfabético
-    companies = sorted(df_sector["CompanyNameTo"].unique())
+    companies = unique_sorted(rows_sector, "CompanyNameTo")
     num_companies = len(companies)
-    total_cols = num_companies + 2  # col A (etiquetas) + empresas + Total general
+    total_cols = num_companies + 2
 
-    # ─── Sección B: Tabla Pivote de Calificaciones ──────────────────────────
     ROW_PIVOT_TITLE = 5
     ROW_PIVOT_HEADER = 6
     ROW_PIVOT_START = 7
@@ -147,190 +231,151 @@ def build_sheet(wb, df_sector, id_poll, id_category, id_type, sector_name, type_
     for i in range(3, total_cols + 1):
         set_cell(ws, ROW_PIVOT_TITLE, i, None, fill=FILL_HEADER)
 
-    # Header row: Etiquetas de fila | empresa1 | empresa2 | ... | Total general
     set_cell(ws, ROW_PIVOT_HEADER, 1, "Etiquetas de fila", font=FONT_HEADER, fill=FILL_HEADER)
     for ci, comp in enumerate(companies):
         set_cell(ws, ROW_PIVOT_HEADER, ci + 2, comp, font=FONT_HEADER, fill=FILL_HEADER)
     set_cell(ws, ROW_PIVOT_HEADER, num_companies + 2, "Total general", font=FONT_HEADER, fill=FILL_HEADER)
 
-    # Construir la estructura jerárquica
-    # Agrupar por PollDesc1 → PollDesc2 → PollDesc3
-    hierarchy = (
-        df_sector.groupby(["PollLevel1", "PollDesc1", "PollLevel2", "PollDesc2", "PollLevel3", "PollDesc3"])
-        .size()
-        .reset_index(name="_count")
-        .sort_values(["PollLevel1", "PollLevel2", "PollLevel3"])
+    hierarchy_keys = sorted(
+        {(
+            r["PollLevel1"], r["PollDesc1"],
+            r["PollLevel2"], r["PollDesc2"],
+            r["PollLevel3"], r["PollDesc3"],
+        ) for r in rows_sector},
+        key=lambda t: (t[0], t[2], t[4]),
     )
 
-    # Pivot: promedio de calificación por PollDesc3 × CompanyNameTo
-    pivot = df_sector.pivot_table(
-        values="Calification",
-        index=["PollLevel1", "PollDesc1", "PollLevel2", "PollDesc2", "PollLevel3", "PollDesc3"],
-        columns="CompanyNameTo",
-        aggfunc="mean",
+    pivot = pivot_mean(
+        rows_sector,
+        ["PollLevel1", "PollDesc1", "PollLevel2", "PollDesc2", "PollLevel3", "PollDesc3"],
+        "CompanyNameTo",
+        "Calification",
     )
-
-    # Guardar referencia de filas para la sección C
-    subcategory_rows = {}  # PollDesc2 -> list of row numbers (nivel 3)
 
     current_row = ROW_PIVOT_START
     prev_level1 = None
     prev_level2 = None
 
-    for (lvl1, desc1, lvl2, desc2, lvl3, desc3) in pivot.index:
-        # Nivel 1
+    for (lvl1, desc1, lvl2, desc2, lvl3, desc3) in hierarchy_keys:
         if desc1 != prev_level1:
             set_cell(ws, current_row, 1, desc1, font=FONT_BOLD)
             apply_row_style(ws, current_row, total_cols, border=BORDER_THIN_BLUE)
             ws.cell(row=current_row, column=1).font = FONT_BOLD
-            # Promedio nivel 1 por empresa
-            df_level1 = df_sector[df_sector["PollDesc1"] == desc1]
+            df_l1 = filter_rows(rows_sector, PollDesc1=desc1)
             for ci, comp in enumerate(companies):
-                val = safe_mean(df_level1[df_level1["CompanyNameTo"] == comp]["Calification"])
+                val = mean_col(filter_rows(df_l1, CompanyNameTo=comp), "Calification")
                 if val is not None:
-                    set_cell(ws, current_row, ci + 2, round(val, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT)
-            # Total general nivel 1
-            val = safe_mean(df_level1["Calification"])
+                    set_cell(ws, current_row, ci + 2, round2(val), font=FONT_BOLD, number_format=NUMBER_FORMAT)
+            val = mean_col(df_l1, "Calification")
             if val is not None:
-                set_cell(ws, current_row, num_companies + 2, round(val, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT)
+                set_cell(ws, current_row, num_companies + 2, round2(val), font=FONT_BOLD, number_format=NUMBER_FORMAT)
             current_row += 1
             prev_level1 = desc1
             prev_level2 = None
 
-        # Nivel 2
         if desc2 != prev_level2:
             set_cell(ws, current_row, 1, f"  {desc2}", font=FONT_BOLD)
             apply_row_style(ws, current_row, total_cols, border=BORDER_THIN_BLUE)
             ws.cell(row=current_row, column=1).font = FONT_BOLD
-            # Promedio nivel 2 por empresa
-            df_level2 = df_sector[(df_sector["PollDesc1"] == desc1) & (df_sector["PollDesc2"] == desc2)]
+            df_l2 = filter_rows(rows_sector, PollDesc1=desc1, PollDesc2=desc2)
             for ci, comp in enumerate(companies):
-                val = safe_mean(df_level2[df_level2["CompanyNameTo"] == comp]["Calification"])
+                val = mean_col(filter_rows(df_l2, CompanyNameTo=comp), "Calification")
                 if val is not None:
-                    set_cell(ws, current_row, ci + 2, round(val, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT)
-            # Total general nivel 2
-            val = safe_mean(df_level2["Calification"])
+                    set_cell(ws, current_row, ci + 2, round2(val), font=FONT_BOLD, number_format=NUMBER_FORMAT)
+            val = mean_col(df_l2, "Calification")
             if val is not None:
-                set_cell(ws, current_row, num_companies + 2, round(val, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT)
+                set_cell(ws, current_row, num_companies + 2, round2(val), font=FONT_BOLD, number_format=NUMBER_FORMAT)
             current_row += 1
             prev_level2 = desc2
-            if desc2 not in subcategory_rows:
-                subcategory_rows[desc2] = []
 
-        # Nivel 3: pregunta individual
-        # Truncar texto largo para que quepa
         desc3_display = desc3 if len(str(desc3)) <= 120 else str(desc3)[:117] + "..."
         set_cell(ws, current_row, 1, f"    {desc3_display}")
 
-        row_data = pivot.loc[(lvl1, desc1, lvl2, desc2, lvl3, desc3)]
+        key = (lvl1, desc1, lvl2, desc2, lvl3, desc3)
+        row_map = pivot.get(key, {})
         company_vals = []
         for ci, comp in enumerate(companies):
-            val = row_data.get(comp, None)
-            if pd.notna(val):
-                set_cell(ws, current_row, ci + 2, round(val, 2), number_format=NUMBER_FORMAT)
+            val = row_map.get(comp)
+            if is_num(val):
+                set_cell(ws, current_row, ci + 2, round2(val), number_format=NUMBER_FORMAT)
                 company_vals.append(val)
-            else:
-                company_vals.append(None)
 
-        # Total general para esta pregunta
-        valid_vals = [v for v in company_vals if v is not None]
-        if valid_vals:
-            total_val = np.mean(valid_vals)
-            set_cell(ws, current_row, num_companies + 2, round(total_val, 2), number_format=NUMBER_FORMAT)
+        if company_vals:
+            total_val = sum(company_vals) / len(company_vals)
+            set_cell(ws, current_row, num_companies + 2, round2(total_val), number_format=NUMBER_FORMAT)
 
-        subcategory_rows[desc2].append(current_row)
         current_row += 1
 
-    # Fila Total General
     row_total_general = current_row
     set_cell(ws, row_total_general, 1, "Total general", font=FONT_BOLD, fill=FILL_HEADER)
     for ci, comp in enumerate(companies):
-        val = safe_mean(df_sector[df_sector["CompanyNameTo"] == comp]["Calification"])
+        val = mean_col(filter_rows(rows_sector, CompanyNameTo=comp), "Calification")
         if val is not None:
-            set_cell(ws, row_total_general, ci + 2, round(val, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
-    val = safe_mean(df_sector["Calification"])
+            set_cell(ws, row_total_general, ci + 2, round2(val), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
+    val = mean_col(rows_sector, "Calification")
     if val is not None:
-        set_cell(ws, row_total_general, num_companies + 2, round(val, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
+        set_cell(ws, row_total_general, num_companies + 2, round2(val), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
 
     current_row = row_total_general + 3
 
-    # ─── Sección C: Resumen por Subcategoría ────────────────────────────────
+    # Seccion C: Resumen por Subcategoria
     ROW_RESUMEN_HEADER = current_row
-    set_cell(ws, ROW_RESUMEN_HEADER, 1, "Subcategoría", font=FONT_HEADER, fill=FILL_HEADER)
+    set_cell(ws, ROW_RESUMEN_HEADER, 1, "Subcategoria", font=FONT_HEADER, fill=FILL_HEADER)
     for ci, comp in enumerate(companies):
         set_cell(ws, ROW_RESUMEN_HEADER, ci + 2, comp, font=FONT_HEADER, fill=FILL_HEADER)
     set_cell(ws, ROW_RESUMEN_HEADER, num_companies + 2, "Total general", font=FONT_HEADER, fill=FILL_HEADER)
 
     current_row = ROW_RESUMEN_HEADER + 1
-
-    # Calcular promedios por subcategoría directamente de los datos
-    subcategory_avgs = {}  # comp -> promedio general
     company_subcat_vals = {comp: [] for comp in companies}
-
-    present_subcats = [s for s in SUBCATEGORY_ORDER if s in df_sector["PollDesc2"].unique()]
-    # Agregar cualquier subcategoría no listada
-    for s in sorted(df_sector["PollDesc2"].unique()):
-        if s not in present_subcats:
-            present_subcats.append(s)
+    present_subcats = ordered_subcategories(rows_sector)
 
     for subcat in present_subcats:
         set_cell(ws, current_row, 1, subcat, font=FONT_BASE)
-        df_sub = df_sector[df_sector["PollDesc2"] == subcat]
+        df_sub = filter_rows(rows_sector, PollDesc2=subcat)
 
         all_subcat_vals = []
         for ci, comp in enumerate(companies):
-            val = safe_mean(df_sub[df_sub["CompanyNameTo"] == comp]["Calification"])
+            val = mean_col(filter_rows(df_sub, CompanyNameTo=comp), "Calification")
             if val is not None:
-                set_cell(ws, current_row, ci + 2, round(val, 2), number_format=NUMBER_FORMAT)
+                set_cell(ws, current_row, ci + 2, round2(val), number_format=NUMBER_FORMAT)
                 company_subcat_vals[comp].append(val)
                 all_subcat_vals.append(val)
 
         if all_subcat_vals:
-            set_cell(ws, current_row, num_companies + 2, round(np.mean(all_subcat_vals), 2), number_format=NUMBER_FORMAT)
-
+            set_cell(ws, current_row, num_companies + 2, round2(sum(all_subcat_vals) / len(all_subcat_vals)), number_format=NUMBER_FORMAT)
         current_row += 1
 
-    # Fila promedio general subcategorías
     row_avg_subcat = current_row
     set_cell(ws, row_avg_subcat, 1, "Total general", font=FONT_BOLD, fill=FILL_HEADER)
     company_general_avg = {}
     for ci, comp in enumerate(companies):
         vals = company_subcat_vals[comp]
         if vals:
-            avg = np.mean(vals)
-            company_general_avg[comp] = round(avg, 2)
-            set_cell(ws, row_avg_subcat, ci + 2, round(avg, 2), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
+            avg = sum(vals) / len(vals)
+            company_general_avg[comp] = round2(avg)
+            set_cell(ws, row_avg_subcat, ci + 2, round2(avg), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
 
-    all_avgs = [v for v in company_general_avg.values()]
+    all_avgs = list(company_general_avg.values())
     if all_avgs:
-        set_cell(ws, row_avg_subcat, num_companies + 2, round(np.mean(all_avgs), 2), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
+        set_cell(ws, row_avg_subcat, num_companies + 2, round2(sum(all_avgs) / len(all_avgs)), font=FONT_BOLD, number_format=NUMBER_FORMAT, fill=FILL_HEADER)
 
     current_row = row_avg_subcat + 3
 
-    # ─── Sección E: Conteo de Evaluadores (antes del ranking para poder usarlo) ─
-    evaluator_counts = (
-        df_sector.groupby("CompanyNameTo")["CompanyNameFrom"]
-        .nunique()
-        .reset_index()
-        .rename(columns={"CompanyNameFrom": "num_evaluadores"})
-    )
-    eval_dict = dict(zip(evaluator_counts["CompanyNameTo"], evaluator_counts["num_evaluadores"]))
+    # Conteo de Evaluadores
+    eval_dict = group_nunique(rows_sector, "CompanyNameTo", "CompanyNameFrom")
 
-    # ─── Sección D: Ranking de Empresas ─────────────────────────────────────
+    # Seccion D: Ranking
     ROW_RANKING_TITLE = current_row
     set_cell(ws, ROW_RANKING_TITLE, 2, "EMPRESA", font=FONT_HEADER, fill=FILL_HEADER)
     set_cell(ws, ROW_RANKING_TITLE, 3, "PUNTAJE", font=FONT_HEADER, fill=FILL_HEADER)
     set_cell(ws, ROW_RANKING_TITLE, 4, "PUESTO", font=FONT_HEADER, fill=FILL_HEADER)
     set_cell(ws, ROW_RANKING_TITLE, 5, "CANT EVALUADORES", font=FONT_HEADER, fill=FILL_HEADER)
 
-    # Ordenar por puntaje descendente
     ranking_data = sorted(company_general_avg.items(), key=lambda x: x[1], reverse=True)
-
     current_row = ROW_RANKING_TITLE + 1
     top_n = min(7, len(ranking_data))
 
     for rank, (comp, score) in enumerate(ranking_data, 1):
-        # Determinar estilo
         if rank <= top_n:
             fill = FILL_GREEN
             font = Font(name="Aptos Narrow", size=11, bold=True, color="000000")
@@ -346,34 +391,31 @@ def build_sheet(wb, df_sector, id_poll, id_category, id_type, sector_name, type_
 
     current_row += 2
 
-    # ─── Sección E: Conteo de Evaluadores ───────────────────────────────────
+    # Seccion E: Conteo de Evaluadores
     ROW_EVAL_TITLE = current_row
     set_cell(ws, ROW_EVAL_TITLE, 1, "Etiquetas de fila", font=FONT_HEADER, fill=FILL_HEADER)
     set_cell(ws, ROW_EVAL_TITLE, 2, "# Empresas que lo evaluaron", font=FONT_HEADER, fill=FILL_HEADER)
 
     current_row = ROW_EVAL_TITLE + 1
-    for _, row in evaluator_counts.sort_values("CompanyNameTo").iterrows():
-        set_cell(ws, current_row, 1, row["CompanyNameTo"])
-        set_cell(ws, current_row, 2, int(row["num_evaluadores"]))
+    for comp in sorted(eval_dict.keys()):
+        set_cell(ws, current_row, 1, comp)
+        set_cell(ws, current_row, 2, int(eval_dict[comp]))
         current_row += 1
 
-    # ─── Ajustar anchos de columna ──────────────────────────────────────────
     ws.column_dimensions["A"].width = 45
     for ci in range(2, total_cols + 1):
         ws.column_dimensions[get_column_letter(ci)].width = 18
 
 
-def generate_workbook(df, output_path):
-    """Construye el workbook a partir de un DataFrame ya cargado y lo guarda."""
+def generate_workbook(rows, output_path):
+    """Construye el workbook a partir de una lista de records (dicts) y lo guarda."""
     wb = Workbook()
     wb.remove(wb.active)
 
     for id_category, sector_name in SECTOR_MAP.items():
         for id_type, type_short in TYPE_MAP.items():
-            df_filtered = df[
-                (df["IDCategory"] == id_category) & (df["IDType"] == id_type)
-            ].copy()
-            id_poll = df_filtered["IDPoll"].iloc[0] if not df_filtered.empty else "DV"
+            df_filtered = filter_rows(rows, IDCategory=id_category, IDType=id_type)
+            id_poll = df_filtered[0]["IDPoll"] if df_filtered else "DV"
             build_sheet(wb, df_filtered, id_poll, id_category, id_type, sector_name, type_short)
 
     wb.save(output_path)
@@ -382,12 +424,12 @@ def generate_workbook(df, output_path):
 
 def main():
     print("Leyendo archivo fuente...")
-    df = read_input_excel()
-    auto_eval = len(df[df["CompanyNameFrom"] == df["CompanyNameTo"]])
-    df = df[df["CompanyNameFrom"] != df["CompanyNameTo"]].copy()
-    print(f"  Filas totales: {len(df)} (excluidas {auto_eval} auto-evaluaciones)")
+    rows = read_xlsx_records(find_input_file())
+    auto_eval = sum(1 for r in rows if r.get("CompanyNameFrom") == r.get("CompanyNameTo"))
+    rows = [r for r in rows if r.get("CompanyNameFrom") != r.get("CompanyNameTo")]
+    print(f"  Filas totales: {len(rows)} (excluidas {auto_eval} auto-evaluaciones)")
     print(f"\nGuardando resultado en: {OUTPUT_FILE}")
-    generate_workbook(df, OUTPUT_FILE)
+    generate_workbook(rows, OUTPUT_FILE)
     print("Listo!")
 
 
