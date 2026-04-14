@@ -37,8 +37,8 @@ export default function UploadScreen({ onLoaded }) {
             <BarChart3 className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-primary-800 font-bold text-xl tracking-tight leading-none">COLDEX Sectorial</h1>
-            <p className="text-muted text-[11px] font-medium tracking-widest uppercase mt-1">Dashboard 2025</p>
+            <h1 className="text-primary-800 font-bold text-xl tracking-tight leading-none">Procesamiento LOGYCA</h1>
+            <p className="text-muted text-[11px] font-medium tracking-widest uppercase mt-1">COLDEX Sectorial</p>
           </div>
         </div>
 

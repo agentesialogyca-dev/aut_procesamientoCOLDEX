@@ -67,7 +67,7 @@ export const exportExcel = async (file) => {
   const url = window.URL.createObjectURL(r.data);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'Procesamiento_COLDEX_Sectorial_2025.xlsx';
+  a.download = 'Procesamiento_LOGYCA_COLDEX_Sectorial.xlsx';
   a.click();
   window.URL.revokeObjectURL(url);
 };

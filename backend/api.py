@@ -336,5 +336,5 @@ async def export_excel(file: UploadFile = File(...)):
     return FileResponse(
         tmp.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="Procesamiento_COLDEX_Sectorial_2025.xlsx",
+        filename="Procesamiento_LOGYCA_COLDEX_Sectorial.xlsx",
     )

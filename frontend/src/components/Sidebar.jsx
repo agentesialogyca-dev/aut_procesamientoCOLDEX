@@ -45,8 +45,8 @@ export default function Sidebar({ open, onToggle, filters, sector, type, onSecto
                 <BarChart3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-white font-bold text-sm tracking-tight leading-none">COLDEX</h1>
-                <p className="text-primary-100/40 text-[10px] font-medium tracking-widest uppercase mt-0.5">Sectorial 2025</p>
+                <h1 className="text-white font-bold text-sm tracking-tight leading-none">Procesamiento LOGYCA</h1>
+                <p className="text-primary-100/40 text-[10px] font-medium tracking-widest uppercase mt-0.5">COLDEX Sectorial</p>
               </div>
             </div>
             <button onClick={onToggle} className="text-white/30 hover:text-white/70 transition-colors">
