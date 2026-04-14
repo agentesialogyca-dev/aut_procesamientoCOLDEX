@@ -1,30 +1,31 @@
 import { useRef, useState } from 'react';
 import { BarChart3, ChevronLeft, Download, Factory, Store, Loader2, Upload } from 'lucide-react';
-import { exportExcel, uploadExcel } from '../lib/api';
+import { exportExcel, processFile } from '../lib/api';
 
 const SECTOR_ICONS = {
   TXT: '🧵', ELT: '⚡', CNS: '🛒', HGR: '🏠', SLD: '💊', SLDI: '🏥',
 };
 
-export default function Sidebar({ open, onToggle, filters, sector, type, onSectorChange, onTypeChange, filename, onReloaded }) {
+export default function Sidebar({ open, onToggle, filters, sector, type, onSectorChange, onTypeChange, file, onReloaded }) {
   const [exporting, setExporting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
   const handleExport = async () => {
+    if (!file) return;
     setExporting(true);
-    try { await exportExcel(); } finally { setExporting(false); }
+    try { await exportExcel(file); } finally { setExporting(false); }
   };
 
   const handleUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const newFile = e.target.files?.[0];
+    if (!newFile) return;
     setUploadError(null);
     setUploading(true);
     try {
-      const res = await uploadExcel(file);
-      onReloaded?.(res);
+      await processFile(newFile);
+      onReloaded?.(newFile);
     } catch (err) {
       setUploadError(err?.response?.data?.detail || 'Error al cargar');
     } finally {
@@ -109,9 +110,9 @@ export default function Sidebar({ open, onToggle, filters, sector, type, onSecto
 
         {/* Actions */}
         <div className="p-4 border-t border-white/[0.06] space-y-2">
-          {filename && (
-            <p className="text-[10px] text-white/40 truncate" title={filename}>
-              Archivo: <span className="text-white/70">{filename}</span>
+          {file?.name && (
+            <p className="text-[10px] text-white/40 truncate" title={file.name}>
+              Archivo: <span className="text-white/70">{file.name}</span>
             </p>
           )}
           <input

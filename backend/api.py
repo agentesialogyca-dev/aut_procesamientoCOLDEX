@@ -1,9 +1,14 @@
 """
-FastAPI backend para COLDEX Sectorial Dashboard.
-Ejecutar: uvicorn backend.api:app --reload --port 8000
+FastAPI backend para COLDEX Sectorial Dashboard (stateless, serverless-ready).
+
+Dos endpoints:
+  POST /api/process  -> recibe el Excel, devuelve todo el JSON procesado.
+  POST /api/export   -> recibe el Excel, devuelve el .xlsx formateado.
+
+Local dev: uvicorn backend.api:app --reload --port 8000
 """
 
-from fastapi import FastAPI, Query, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import pandas as pd
@@ -21,7 +26,7 @@ from procesar_coldex import (
     SUBCATEGORY_ORDER,
 )
 
-app = FastAPI(title="COLDEX Sectorial API", version="1.0.0")
+app = FastAPI(title="COLDEX Sectorial API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,15 +35,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-_state = {"df": None, "filename": None}
-
-
-def load_data():
-    df = _state["df"]
-    if df is None:
-        raise HTTPException(status_code=400, detail="No se ha cargado ningun archivo Excel.")
-    return df
+REQUIRED_COLUMNS = {
+    "CompanyNameFrom", "CompanyNameTo", "IDCategory", "IDType",
+    "Calification", "PollDesc1", "PollDesc2", "PollDesc3",
+    "PollLevel1", "PollLevel2", "PollLevel3",
+}
 
 
 def safe_mean(series):
@@ -46,57 +47,63 @@ def safe_mean(series):
     return round(float(vals.mean()), 2) if len(vals) > 0 else None
 
 
-# ─── Endpoints ──────────────────────────────────────────────────────────────────
+def clean_nan(obj):
+    """Reemplaza NaN por None recursivamente para que sea JSON-compliant."""
+    if isinstance(obj, dict):
+        return {k: clean_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [clean_nan(v) for v in obj]
+    if isinstance(obj, float) and (np.isnan(obj) or np.isinf(obj)):
+        return None
+    return obj
 
 
-@app.get("/api/filters")
-def get_filters():
-    """Opciones de filtro disponibles."""
-    return {
-        "sectors": [{"code": k, "name": v} for k, v in SECTOR_MAP.items()],
-        "types": [{"code": k, "short": v} for k, v in TYPE_MAP.items()],
-    }
+def parse_excel(contents: bytes, filename: str) -> pd.DataFrame:
+    if not filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="El archivo debe ser .xlsx o .xls")
+    try:
+        df = pd.read_excel(io.BytesIO(contents), sheet_name=0)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"No se pudo leer el Excel: {e}")
+
+    missing = REQUIRED_COLUMNS - set(df.columns)
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Faltan columnas: {sorted(missing)}")
+
+    return df[df["CompanyNameFrom"] != df["CompanyNameTo"]].copy()
 
 
-@app.get("/api/summary")
-def get_summary(sector: str = Query(...), type: str = Query(...)):
-    """Metricas resumen para un sector y tipo."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
+# ─── Compute functions (puras, reciben DataFrame) ────────────────────────────
 
+def compute_summary(dfs):
     if dfs.empty:
         return {"empty": True}
-
     companies = sorted(dfs["CompanyNameTo"].unique().tolist())
-    evaluators = int(dfs["CompanyNameFrom"].nunique())
-
     return {
         "empty": False,
         "records": len(dfs),
         "companies": len(companies),
-        "evaluators": evaluators,
+        "evaluators": int(dfs["CompanyNameFrom"].nunique()),
         "average": round(float(dfs["Calification"].mean()), 2),
         "companyList": companies,
     }
 
 
-@app.get("/api/subcategories")
-def get_subcategories(sector: str = Query(...), type: str = Query(...)):
-    """Promedio por subcategoria (para barras y resumen)."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
-
-    if dfs.empty:
-        return []
-
-    companies = sorted(dfs["CompanyNameTo"].unique().tolist())
-    present = [s for s in SUBCATEGORY_ORDER if s in dfs["PollDesc2"].unique()]
-    for s in sorted(dfs["PollDesc2"].unique()):
+def ordered_subcategories(dfs):
+    unique = dfs["PollDesc2"].unique()
+    present = [s for s in SUBCATEGORY_ORDER if s in unique]
+    for s in sorted(unique):
         if s not in present:
             present.append(s)
+    return present
 
+
+def compute_subcategories(dfs):
+    if dfs.empty:
+        return []
+    companies = sorted(dfs["CompanyNameTo"].unique().tolist())
     result = []
-    for subcat in present:
+    for subcat in ordered_subcategories(dfs):
         df_sub = dfs[dfs["PollDesc2"] == subcat]
         row = {"name": subcat, "average": safe_mean(df_sub["Calification"]), "companies": {}}
         for comp in companies:
@@ -104,25 +111,14 @@ def get_subcategories(sector: str = Query(...), type: str = Query(...)):
             if val is not None:
                 row["companies"][comp] = val
         result.append(row)
-
     return result
 
 
-@app.get("/api/pivot")
-def get_pivot(sector: str = Query(...), type: str = Query(...), subcategories: str = Query(default="")):
-    """Tabla pivote jerarquica."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
-
+def compute_pivot(dfs):
     if dfs.empty:
         return {"companies": [], "rows": []}
 
-    if subcategories:
-        selected = subcategories.split(",")
-        dfs = dfs[dfs["PollDesc2"].isin(selected)]
-
     companies = sorted(dfs["CompanyNameTo"].unique().tolist())
-
     pivot = dfs.pivot_table(
         values="Calification",
         index=["PollLevel1", "PollDesc1", "PollLevel2", "PollDesc2", "PollLevel3", "PollDesc3"],
@@ -132,7 +128,6 @@ def get_pivot(sector: str = Query(...), type: str = Query(...), subcategories: s
 
     rows = []
     prev_l1 = prev_l2 = None
-
     for (lvl1, desc1, lvl2, desc2, lvl3, desc3) in pivot.index:
         if desc1 != prev_l1:
             df_l1 = dfs[dfs["PollDesc1"] == desc1]
@@ -172,21 +167,11 @@ def get_pivot(sector: str = Query(...), type: str = Query(...), subcategories: s
     return {"companies": companies, "rows": rows}
 
 
-@app.get("/api/ranking")
-def get_ranking(sector: str = Query(...), type: str = Query(...)):
-    """Ranking de empresas."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
-
+def compute_ranking(dfs):
     if dfs.empty:
         return []
-
     companies = sorted(dfs["CompanyNameTo"].unique().tolist())
-
-    present = [s for s in SUBCATEGORY_ORDER if s in dfs["PollDesc2"].unique()]
-    for s in sorted(dfs["PollDesc2"].unique()):
-        if s not in present:
-            present.append(s)
+    present = ordered_subcategories(dfs)
 
     company_vals = {comp: [] for comp in companies}
     for subcat in present:
@@ -206,30 +191,17 @@ def get_ranking(sector: str = Query(...), type: str = Query(...)):
                 "score": round(float(np.mean(company_vals[comp])), 2),
                 "evaluators": int(eval_counts.get(comp, 0)),
             })
-
     ranking.sort(key=lambda x: x["score"], reverse=True)
     for i, r in enumerate(ranking):
         r["rank"] = i + 1
-
     return ranking
 
 
-@app.get("/api/radar")
-def get_radar(sector: str = Query(...), type: str = Query(...), top: int = Query(default=5)):
-    """Datos radar para top N empresas."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
-
+def compute_radar(dfs, ranking, top=5):
     if dfs.empty:
         return {"companies": [], "subcategories": [], "data": []}
-
-    ranking = get_ranking(sector=sector, type=type)
     top_companies = [r["company"] for r in ranking[:top]]
-
-    present = [s for s in SUBCATEGORY_ORDER if s in dfs["PollDesc2"].unique()]
-    for s in sorted(dfs["PollDesc2"].unique()):
-        if s not in present:
-            present.append(s)
+    present = ordered_subcategories(dfs)
 
     data = []
     for comp in top_companies:
@@ -239,16 +211,10 @@ def get_radar(sector: str = Query(...), type: str = Query(...), top: int = Query
             val = safe_mean(df_sub["Calification"])
             values.append(val if val is not None else 0)
         data.append({"company": comp, "values": values})
-
     return {"companies": top_companies, "subcategories": present, "data": data}
 
 
-@app.get("/api/evaluators")
-def get_evaluators(sector: str = Query(...), type: str = Query(...)):
-    """Conteo de evaluadores y matriz."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
-
+def compute_evaluators(dfs):
     if dfs.empty:
         return {"counts": [], "matrix": {"from": [], "to": [], "values": []}}
 
@@ -267,32 +233,21 @@ def get_evaluators(sector: str = Query(...), type: str = Query(...)):
         aggfunc="mean",
     ).round(2)
 
-    matrix_data = {
-        "from": matrix.index.tolist(),
-        "to": matrix.columns.tolist(),
-        "values": matrix.where(pd.notna(matrix), None).values.tolist(),
-    }
-
     return {
         "counts": counts.to_dict(orient="records"),
-        "matrix": matrix_data,
+        "matrix": {
+            "from": matrix.index.tolist(),
+            "to": matrix.columns.tolist(),
+            "values": matrix.where(pd.notna(matrix), None).values.tolist(),
+        },
     }
 
 
-@app.get("/api/heatmap")
-def get_heatmap(sector: str = Query(...), type: str = Query(...)):
-    """Heatmap subcategoria x empresa."""
-    df = load_data()
-    dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type)]
-
+def compute_heatmap(dfs):
     if dfs.empty:
         return {"subcategories": [], "companies": [], "values": []}
-
     companies = sorted(dfs["CompanyNameTo"].unique().tolist())
-    present = [s for s in SUBCATEGORY_ORDER if s in dfs["PollDesc2"].unique()]
-    for s in sorted(dfs["PollDesc2"].unique()):
-        if s not in present:
-            present.append(s)
+    present = ordered_subcategories(dfs)
 
     values = []
     for subcat in present:
@@ -302,42 +257,64 @@ def get_heatmap(sector: str = Query(...), type: str = Query(...)):
             val = safe_mean(df_sub[df_sub["CompanyNameTo"] == comp]["Calification"])
             row.append(val)
         values.append(row)
-
     return {"subcategories": present, "companies": companies, "values": values}
 
 
-@app.get("/api/status")
-def get_status():
-    """Indica si hay un archivo cargado."""
-    return {"loaded": _state["df"] is not None, "filename": _state["filename"]}
+def process_all(df):
+    """Calcula todas las vistas para todas las combinaciones sector x tipo."""
+    result = {
+        "filters": {
+            "sectors": [{"code": k, "name": v} for k, v in SECTOR_MAP.items()],
+            "types": [{"code": k, "short": v} for k, v in TYPE_MAP.items()],
+        },
+        "views": {},
+    }
+
+    for sector in SECTOR_MAP:
+        for type_code in TYPE_MAP:
+            dfs = df[(df["IDCategory"] == sector) & (df["IDType"] == type_code)]
+            key = f"{sector}|{type_code}"
+            summary = compute_summary(dfs)
+            if summary.get("empty"):
+                result["views"][key] = {"summary": summary}
+                continue
+            ranking = compute_ranking(dfs)
+            result["views"][key] = {
+                "summary": summary,
+                "subcategories": compute_subcategories(dfs),
+                "pivot": compute_pivot(dfs),
+                "ranking": ranking,
+                "radar": compute_radar(dfs, ranking),
+                "evaluators": compute_evaluators(dfs),
+                "heatmap": compute_heatmap(dfs),
+            }
+    return result
 
 
-@app.post("/api/upload")
-async def upload_excel(file: UploadFile = File(...)):
-    """Carga un archivo Excel en memoria como fuente de datos."""
-    if not file.filename.lower().endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="El archivo debe ser .xlsx o .xls")
-    try:
-        contents = await file.read()
-        df = pd.read_excel(io.BytesIO(contents), sheet_name=0)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"No se pudo leer el Excel: {e}")
+# ─── Endpoints ───────────────────────────────────────────────────────────────
 
-    required = {"CompanyNameFrom", "CompanyNameTo", "IDCategory", "IDType", "Calification", "PollDesc2"}
-    missing = required - set(df.columns)
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Faltan columnas en el Excel: {sorted(missing)}")
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
 
-    df = df[df["CompanyNameFrom"] != df["CompanyNameTo"]].copy()
-    _state["df"] = df
-    _state["filename"] = file.filename
-    return {"loaded": True, "filename": file.filename, "records": len(df)}
+
+@app.post("/api/process")
+async def process_excel(file: UploadFile = File(...)):
+    """Recibe el Excel y devuelve todo el dataset procesado."""
+    contents = await file.read()
+    df = parse_excel(contents, file.filename)
+    data = process_all(df)
+    data["filename"] = file.filename
+    data["records"] = len(df)
+    return clean_nan(data)
 
 
 @app.post("/api/export")
-def export_excel():
-    """Genera y descarga el Excel procesado a partir del archivo cargado."""
-    df = load_data()
+async def export_excel(file: UploadFile = File(...)):
+    """Recibe el Excel y devuelve el .xlsx formateado."""
+    contents = await file.read()
+    df = parse_excel(contents, file.filename)
+
     tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
     tmp.close()
     generate_workbook(df, Path(tmp.name))

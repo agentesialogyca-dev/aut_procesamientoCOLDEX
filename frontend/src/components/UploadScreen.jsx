@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { BarChart3, Upload, Loader2, FileSpreadsheet } from 'lucide-react';
-import { uploadExcel } from '../lib/api';
+import { processFile } from '../lib/api';
 
 export default function UploadScreen({ onLoaded }) {
   const inputRef = useRef(null);
@@ -13,8 +13,8 @@ export default function UploadScreen({ onLoaded }) {
     setError(null);
     setUploading(true);
     try {
-      const res = await uploadExcel(file);
-      onLoaded(res);
+      await processFile(file);
+      onLoaded(file);
     } catch (e) {
       setError(e?.response?.data?.detail || 'No se pudo cargar el archivo');
     } finally {

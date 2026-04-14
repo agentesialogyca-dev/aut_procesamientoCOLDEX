@@ -9,7 +9,7 @@ import RankingTab from './components/RankingTab';
 import EvaluatorsTab from './components/EvaluatorsTab';
 import LoadingScreen from './components/LoadingScreen';
 import UploadScreen from './components/UploadScreen';
-import { getFilters, getSummary, getStatus } from './lib/api';
+import { getFilters, getSummary } from './lib/api';
 import { useApi } from './hooks/useApi';
 
 const TABS = ['Resumen', 'Tabla Pivote', 'Ranking', 'Evaluadores'];
@@ -19,31 +19,26 @@ export default function App() {
   const [type, setType] = useState('INDUSTRIAL');
   const [tab, setTab] = useState('Resumen');
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [status, setStatus] = useState(null);
+  const [file, setFile] = useState(null);
   const [reloadToken, setReloadToken] = useState(0);
 
-  useEffect(() => {
-    getStatus().then(setStatus).catch(() => setStatus({ loaded: false }));
-  }, []);
-
   const { data: filters } = useApi(
-    () => (status?.loaded ? getFilters() : Promise.resolve(null)),
-    [status?.loaded, reloadToken],
+    () => (file ? getFilters() : Promise.resolve(null)),
+    [file, reloadToken],
   );
   const { data: summary, loading } = useApi(
-    () => (status?.loaded ? getSummary(sector, type) : Promise.resolve(null)),
-    [sector, type, status?.loaded, reloadToken],
+    () => (file ? getSummary(sector, type) : Promise.resolve(null)),
+    [sector, type, file, reloadToken],
   );
 
   useEffect(() => { setTab('Resumen'); }, [sector, type]);
 
-  const handleLoaded = (res) => {
-    setStatus({ loaded: true, filename: res.filename });
+  const handleLoaded = (loadedFile) => {
+    setFile(loadedFile);
     setReloadToken((t) => t + 1);
   };
 
-  if (!status) return <LoadingScreen />;
-  if (!status.loaded) return <UploadScreen onLoaded={handleLoaded} />;
+  if (!file) return <UploadScreen onLoaded={handleLoaded} />;
   if (!filters) return <LoadingScreen />;
 
   return (
@@ -56,7 +51,7 @@ export default function App() {
         type={type}
         onSectorChange={setSector}
         onTypeChange={setType}
-        filename={status.filename}
+        file={file}
         onReloaded={handleLoaded}
       />
 
