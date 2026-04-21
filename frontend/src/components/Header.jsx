@@ -1,10 +1,11 @@
-import { Menu, Factory, Store } from 'lucide-react';
+import { Menu, Factory, Store, Globe } from 'lucide-react';
 
 const SECTOR_NAMES = {
   TXT: 'Textil', ELT: 'Electro', CNS: 'Consumo', HGR: 'Hogar', SLD: 'Salud', SLDI: 'Salud Insumos',
 };
 
 export default function Header({ sector, type, sidebarOpen, onToggleSidebar }) {
+  const isGeneral = sector === 'GENERAL';
   const Icon = type === 'INDUSTRIAL' ? Factory : Store;
 
   return (
@@ -19,13 +20,20 @@ export default function Header({ sector, type, sidebarOpen, onToggleSidebar }) {
       )}
       <div>
         <h1 className="text-2xl font-bold text-primary-800 tracking-tight">
-          {SECTOR_NAMES[sector] || sector}
+          {isGeneral ? 'General' : (SECTOR_NAMES[sector] || sector)}
         </h1>
       </div>
-      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-50 text-primary-600 text-xs font-semibold">
-        <Icon className="w-3.5 h-3.5" />
-        {type}
-      </span>
+      {isGeneral ? (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-50 text-primary-600 text-xs font-semibold">
+          <Globe className="w-3.5 h-3.5" />
+          Consolidado de todos los sectores
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-50 text-primary-600 text-xs font-semibold">
+          <Icon className="w-3.5 h-3.5" />
+          {type}
+        </span>
+      )}
     </div>
   );
 }

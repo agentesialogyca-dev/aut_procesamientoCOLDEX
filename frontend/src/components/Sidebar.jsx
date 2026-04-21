@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { BarChart3, ChevronLeft, Download, Factory, Store, Loader2, Upload } from 'lucide-react';
+import { BarChart3, ChevronLeft, Download, Factory, Store, Loader2, Upload, Globe } from 'lucide-react';
 import { exportExcel, processFile } from '../lib/api';
 
 const SECTOR_ICONS = {
@@ -64,6 +64,17 @@ export default function Sidebar({ open, onToggle, filters, sector, type, onSecto
               Sector
             </label>
             <div className="space-y-1">
+              <button
+                onClick={() => onSectorChange('GENERAL')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-sm transition-all
+                  ${sector === 'GENERAL'
+                    ? 'bg-white/[0.12] text-white font-medium shadow-sm'
+                    : 'text-white/50 hover:text-white/80 hover:bg-white/[0.05]'
+                  }`}
+              >
+                <Globe className="w-4 h-4" />
+                General
+              </button>
               {filters.sectors.map(s => (
                 <button
                   key={s.code}
@@ -81,7 +92,7 @@ export default function Sidebar({ open, onToggle, filters, sector, type, onSecto
             </div>
           </div>
 
-          <div>
+          <div className={sector === 'GENERAL' ? 'opacity-40 pointer-events-none' : ''}>
             <label className="text-[10px] font-semibold text-white/40 tracking-[0.1em] uppercase mb-2 block">
               Tipo de empresa
             </label>

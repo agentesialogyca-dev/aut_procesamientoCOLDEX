@@ -20,6 +20,60 @@ export const processFile = async (file) => {
 export const hasData = () => _cache !== null;
 export const getCurrentFilename = () => _cache?.filename || null;
 
+export const getGeneralData = () => {
+  if (!_cache) return Promise.resolve([]);
+  const sectors = _cache.filters.sectors;
+  const types = _cache.filters.types;
+  const result = sectors.map((s) => {
+    const combined = {};
+    const ensure = (name) => {
+      if (!combined[name]) combined[name] = { evaluatedBy: {}, evaluated: {}, types: {}, scores: {} };
+      return combined[name];
+    };
+
+    for (const t of types) {
+      const v = _cache.views[`${s.code}|${t.code}`];
+      if (!v || v.summary?.empty) continue;
+      const { matrix } = v.evaluators;
+      const rankingMap = Object.fromEntries((v.ranking || []).map((r) => [r.company, r]));
+
+      matrix.to.forEach((toName, ci) => {
+        const evaluators = matrix.from.filter((_, ri) => matrix.values[ri]?.[ci] != null);
+        const c = ensure(toName);
+        c.evaluatedBy[t.code] = evaluators;
+        c.types[t.code] = true;
+        const r = rankingMap[toName];
+        if (r) c.scores[t.code] = { score: r.score, rank: r.rank };
+      });
+
+      matrix.from.forEach((fromName, ri) => {
+        const targets = matrix.to.filter((_, ci) => matrix.values[ri]?.[ci] != null);
+        const c = ensure(fromName);
+        c.evaluated[t.code] = targets;
+      });
+    }
+
+    const companies = Object.entries(combined)
+      .map(([name, c]) => {
+        const allBy = new Set();
+        Object.values(c.evaluatedBy).forEach((list) => list.forEach((n) => allBy.add(n)));
+        const allEvaluated = new Set();
+        Object.values(c.evaluated).forEach((list) => list.forEach((n) => allEvaluated.add(n)));
+        return {
+          name,
+          types: c.types,
+          scores: c.scores,
+          evaluatedBy: [...allBy].sort(),
+          evaluated: [...allEvaluated].sort(),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { code: s.code, name: s.name, companies };
+  });
+  return Promise.resolve(result);
+};
+
 export const getFilters = () =>
   Promise.resolve(_cache?.filters || { sectors: [], types: [] });
 

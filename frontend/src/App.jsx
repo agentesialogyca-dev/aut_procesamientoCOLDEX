@@ -9,6 +9,7 @@ import RankingTab from './components/RankingTab';
 import EvaluatorsTab from './components/EvaluatorsTab';
 import LoadingScreen from './components/LoadingScreen';
 import UploadScreen from './components/UploadScreen';
+import GeneralView from './components/GeneralView';
 import { getFilters, getSummary } from './lib/api';
 import { useApi } from './hooks/useApi';
 
@@ -22,13 +23,15 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [reloadToken, setReloadToken] = useState(0);
 
+  const isGeneral = sector === 'GENERAL';
+
   const { data: filters } = useApi(
     () => (file ? getFilters() : Promise.resolve(null)),
     [file, reloadToken],
   );
   const { data: summary, loading } = useApi(
-    () => (file ? getSummary(sector, type) : Promise.resolve(null)),
-    [sector, type, file, reloadToken],
+    () => (file && !isGeneral ? getSummary(sector, type) : Promise.resolve(null)),
+    [sector, type, file, reloadToken, isGeneral],
   );
 
   useEffect(() => { setTab('Resumen'); }, [sector, type]);
@@ -65,7 +68,9 @@ export default function App() {
             onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
 
-          {loading ? (
+          {isGeneral ? (
+            <GeneralView />
+          ) : loading ? (
             <div className="flex items-center justify-center h-64">
               <div className="w-8 h-8 border-3 border-primary-600 border-t-transparent rounded-full animate-spin" />
             </div>
